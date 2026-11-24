@@ -1,0 +1,226 @@
+name: Build Desktop App (Win7-Win11, macOS, Linux)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  CSC_IDENTITY_AUTO_DISCOVERY: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-windows:
+    name: Windows EXE (Win 7 - Win 11 | 32 & 64 bit)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies & Electron 22 (Win7-Win11)
+        run: |
+          npm install --legacy-peer-deps
+          npm install --no-save --legacy-peer-deps electron@22.3.27 electron-builder@24.13.3
+
+      - name: Build production web bundle
+        run: npm run build
+
+      - name: Prepare desktop packaging config
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.main = pkg.main || 'electron/main.cjs';
+            pkg.version = pkg.version || '1.0.0';
+            pkg.description = pkg.description || 'Al-Qaisi Tires & Batteries POS & A4 Invoice System';
+            pkg.author = pkg.author || 'Ahmed Al-Qaisi <support@alqaisi.local>';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+          cat << 'EOF' > electron-builder.yml
+          appId: com.alqaisi.pos
+          productName: AlQaisi-POS
+          copyright: Ahmed Al-Qaisi Tires & Batteries
+          electronVersion: "22.3.27"
+          directories:
+            output: release
+          files:
+            - dist/**/*
+            - electron/**/*
+            - package.json
+          asar: true
+          win:
+            artifactName: AlQaisi-POS-${version}-${arch}.${ext}
+            target:
+              - target: nsis
+                arch:
+                  - x64
+                  - ia32
+              - target: portable
+                arch:
+                  - x64
+                  - ia32
+          nsis:
+            artifactName: AlQaisi-POS-Setup-${version}.${ext}
+            oneClick: false
+            perMachine: false
+            allowToChangeInstallationDirectory: true
+            createDesktopShortcut: true
+            createStartMenuShortcut: true
+            unicode: true
+            shortcutName: أحمد القيسي للإطارات والبطاريات
+          portable:
+            artifactName: AlQaisi-POS-Portable-${version}-${arch}.${ext}
+          EOF
+
+      - name: Package Windows EXE (Setup + Portable 32/64-bit)
+        run: npx electron-builder --win --config electron-builder.yml --publish never
+
+      - name: Upload Windows EXE artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlQaisi-POS-Windows-EXE
+          path: release/*.exe
+
+  build-linux:
+    name: Linux (AppImage & DEB)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies & Electron 22
+        run: |
+          npm install --legacy-peer-deps
+          npm install --no-save --legacy-peer-deps electron@22.3.27 electron-builder@24.13.3
+
+      - name: Build production web bundle
+        run: npm run build
+
+      - name: Prepare desktop packaging config
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.main = pkg.main || 'electron/main.cjs';
+            pkg.version = pkg.version || '1.0.0';
+            pkg.description = pkg.description || 'Al-Qaisi Tires & Batteries POS & A4 Invoice System';
+            pkg.author = pkg.author || 'Ahmed Al-Qaisi <support@alqaisi.local>';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+          cat << 'EOF' > electron-builder.yml
+          appId: com.alqaisi.pos
+          productName: AlQaisi-POS
+          copyright: Ahmed Al-Qaisi Tires & Batteries
+          electronVersion: "22.3.27"
+          directories:
+            output: release
+          files:
+            - dist/**/*
+            - electron/**/*
+            - package.json
+          asar: true
+          linux:
+            category: Office
+            artifactName: AlQaisi-POS-Linux-${version}-${arch}.${ext}
+            target:
+              - target: AppImage
+                arch:
+                  - x64
+              - target: deb
+                arch:
+                  - x64
+          EOF
+
+      - name: Package Linux installers
+        run: npx electron-builder --linux --config electron-builder.yml --publish never
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlQaisi-POS-Linux
+          path: |
+            release/*.AppImage
+            release/*.deb
+
+  build-macos:
+    name: macOS (DMG & ZIP)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies & Electron 22
+        run: |
+          npm install --legacy-peer-deps
+          npm install --no-save --legacy-peer-deps electron@22.3.27 electron-builder@24.13.3
+
+      - name: Build production web bundle
+        run: npm run build
+
+      - name: Prepare desktop packaging config
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.main = pkg.main || 'electron/main.cjs';
+            pkg.version = pkg.version || '1.0.0';
+            pkg.description = pkg.description || 'Al-Qaisi Tires & Batteries POS & A4 Invoice System';
+            pkg.author = pkg.author || 'Ahmed Al-Qaisi <support@alqaisi.local>';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+          cat << 'EOF' > electron-builder.yml
+          appId: com.alqaisi.pos
+          productName: AlQaisi-POS
+          copyright: Ahmed Al-Qaisi Tires & Batteries
+          electronVersion: "22.3.27"
+          directories:
+            output: release
+          files:
+            - dist/**/*
+            - electron/**/*
+            - package.json
+          asar: true
+          mac:
+            category: public.app-category.business
+            artifactName: AlQaisi-POS-Mac-${version}-${arch}.${ext}
+            target:
+              - target: dmg
+                arch:
+                  - x64
+                  - arm64
+              - target: zip
+                arch:
+                  - x64
+                  - arm64
+          EOF
+
+      - name: Package macOS app
+        run: npx electron-builder --mac --config electron-builder.yml --publish never
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlQaisi-POS-macOS
+          path: |
+            release/*.dmg
+            release/*.zip
