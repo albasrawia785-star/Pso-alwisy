@@ -1,4 +1,4 @@
-name: Build Desktop App (Win7-Win11, macOS, Linux)
+name: Build Windows 64-bit EXE (Win7-Win11)
 
 on:
   push:
@@ -15,8 +15,8 @@ defaults:
     shell: bash
 
 jobs:
-  build-windows:
-    name: Windows EXE (Win 7 - Win 11 | 32 & 64 bit)
+  build-windows-x64:
+    name: Windows 64-bit EXE (Win 7 - Win 11)
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -35,7 +35,7 @@ jobs:
       - name: Build production web bundle
         run: npm run build
 
-      - name: Prepare desktop packaging config
+      - name: Prepare Windows 64-bit packaging config
         run: |
           node -e "
             const fs = require('fs');
@@ -46,6 +46,136 @@ jobs:
             pkg.author = pkg.author || 'Ahmed Al-Qaisi <support@alqaisi.local>';
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
+          mkdir -p electron
+          if [ ! -f electron/preload.cjs ]; then
+            cat << 'EOF' > electron/preload.cjs
+          const { contextBridge, ipcRenderer } = require('electron');
+
+          contextBridge.exposeInMainWorld('electronAPI', {
+            getPrinters: () => ipcRenderer.invoke('get-printers'),
+            printInvoice: (options) => ipcRenderer.invoke('print-invoice', options),
+          });
+          EOF
+          fi
+          if [ ! -f electron/main.cjs ]; then
+            cat << 'EOF' > electron/main.cjs
+          const { app, BrowserWindow, ipcMain } = require('electron');
+          const os = require('os');
+          const path = require('path');
+
+          if (os.platform() === 'win32') {
+            const majorKernel = Number.parseInt(os.release().split('.')[0] || '10', 10);
+            if (Number.isFinite(majorKernel) && majorKernel < 10) {
+              app.disableHardwareAcceleration();
+            }
+          }
+
+          const gotSingleInstanceLock = app.requestSingleInstanceLock();
+          if (!gotSingleInstanceLock) {
+            app.quit();
+          }
+
+          let mainWindow = null;
+
+          function createMainWindow() {
+            mainWindow = new BrowserWindow({
+              width: 1366,
+              height: 840,
+              minWidth: 1024,
+              minHeight: 680,
+              title: 'أحمد القيسي للإطارات والبطاريات',
+              backgroundColor: '#F5F7F8',
+              autoHideMenuBar: true,
+              show: false,
+              webPreferences: {
+                preload: path.join(__dirname, 'preload.cjs'),
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: false,
+              },
+            });
+
+            mainWindow.once('ready-to-show', () => {
+              if (mainWindow) mainWindow.show();
+            });
+
+            mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+            mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+            mainWindow.on('closed', () => {
+              mainWindow = null;
+            });
+          }
+
+          app.on('second-instance', () => {
+            if (mainWindow) {
+              if (mainWindow.isMinimized()) mainWindow.restore();
+              mainWindow.focus();
+            }
+          });
+
+          ipcMain.handle('get-printers', async () => {
+            if (!mainWindow || mainWindow.isDestroyed()) return [];
+            try {
+              const wc = mainWindow.webContents;
+              const rawList =
+                typeof wc.getPrintersAsync === 'function'
+                  ? await wc.getPrintersAsync()
+                  : typeof wc.getPrinters === 'function'
+                  ? wc.getPrinters()
+                  : [];
+              if (!Array.isArray(rawList)) return [];
+              return rawList.map((p) => ({
+                name: String(p.name || ''),
+                displayName: p.displayName ? String(p.displayName) : String(p.name || ''),
+                isDefault: Boolean(p.isDefault),
+              }));
+            } catch {
+              return [];
+            }
+          });
+
+          ipcMain.handle('print-invoice', async (_event, options = {}) => {
+            if (!mainWindow || mainWindow.isDestroyed()) {
+              return { success: false, failureReason: 'نافذة التطبيق غير جاهزة للطباعة' };
+            }
+            return new Promise((resolve) => {
+              try {
+                const printOptions = {
+                  silent: Boolean(options.silent),
+                  printBackground: options.printBackground !== false,
+                  landscape: false,
+                  pageSize: 'A4',
+                };
+                if (typeof options.deviceName === 'string' && options.deviceName.trim() !== '') {
+                  printOptions.deviceName = options.deviceName.trim();
+                }
+                mainWindow.webContents.print(printOptions, (success, failureReason) => {
+                  resolve({
+                    success: Boolean(success),
+                    failureReason: failureReason ? String(failureReason) : undefined,
+                  });
+                });
+              } catch (err) {
+                resolve({
+                  success: false,
+                  failureReason: err instanceof Error ? err.message : 'تعذر بدء الطباعة',
+                });
+              }
+            });
+          });
+
+          app.whenReady().then(() => {
+            createMainWindow();
+            app.on('activate', () => {
+              if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+            });
+          });
+
+          app.on('window-all-closed', () => {
+            if (process.platform !== 'darwin') app.quit();
+          });
+          EOF
+          fi
           cat << 'EOF' > electron-builder.yml
           appId: com.alqaisi.pos
           productName: AlQaisi-POS
@@ -64,13 +194,11 @@ jobs:
               - target: nsis
                 arch:
                   - x64
-                  - ia32
               - target: portable
                 arch:
                   - x64
-                  - ia32
           nsis:
-            artifactName: AlQaisi-POS-Setup-${version}.${ext}
+            artifactName: AlQaisi-POS-Setup-${version}-${arch}.${ext}
             oneClick: false
             perMachine: false
             allowToChangeInstallationDirectory: true
@@ -82,145 +210,12 @@ jobs:
             artifactName: AlQaisi-POS-Portable-${version}-${arch}.${ext}
           EOF
 
-      - name: Package Windows EXE (Setup + Portable 32/64-bit)
-        run: npx electron-builder --win --config electron-builder.yml --publish never
+      - name: Package Windows 64-bit EXE (Setup & Portable)
+        run: npx electron-builder --win --x64 --config electron-builder.yml --publish never
 
-      - name: Upload Windows EXE artifacts
+      - name: Upload Windows 64-bit EXE
         uses: actions/upload-artifact@v4
         with:
-          name: AlQaisi-POS-Windows-EXE
+          name: AlQaisi-POS-Windows-64bit-EXE
           path: release/*.exe
-
-  build-linux:
-    name: Linux (AppImage & DEB)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install dependencies & Electron 22
-        run: |
-          npm install --legacy-peer-deps
-          npm install --no-save --legacy-peer-deps electron@22.3.27 electron-builder@24.13.3
-
-      - name: Build production web bundle
-        run: npm run build
-
-      - name: Prepare desktop packaging config
-        run: |
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.main = pkg.main || 'electron/main.cjs';
-            pkg.version = pkg.version || '1.0.0';
-            pkg.description = pkg.description || 'Al-Qaisi Tires & Batteries POS & A4 Invoice System';
-            pkg.author = pkg.author || 'Ahmed Al-Qaisi <support@alqaisi.local>';
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          "
-          cat << 'EOF' > electron-builder.yml
-          appId: com.alqaisi.pos
-          productName: AlQaisi-POS
-          copyright: Ahmed Al-Qaisi Tires & Batteries
-          electronVersion: "22.3.27"
-          directories:
-            output: release
-          files:
-            - dist/**/*
-            - electron/**/*
-            - package.json
-          asar: true
-          linux:
-            category: Office
-            artifactName: AlQaisi-POS-Linux-${version}-${arch}.${ext}
-            target:
-              - target: AppImage
-                arch:
-                  - x64
-              - target: deb
-                arch:
-                  - x64
-          EOF
-
-      - name: Package Linux installers
-        run: npx electron-builder --linux --config electron-builder.yml --publish never
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: AlQaisi-POS-Linux
-          path: |
-            release/*.AppImage
-            release/*.deb
-
-  build-macos:
-    name: macOS (DMG & ZIP)
-    runs-on: macos-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install dependencies & Electron 22
-        run: |
-          npm install --legacy-peer-deps
-          npm install --no-save --legacy-peer-deps electron@22.3.27 electron-builder@24.13.3
-
-      - name: Build production web bundle
-        run: npm run build
-
-      - name: Prepare desktop packaging config
-        run: |
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.main = pkg.main || 'electron/main.cjs';
-            pkg.version = pkg.version || '1.0.0';
-            pkg.description = pkg.description || 'Al-Qaisi Tires & Batteries POS & A4 Invoice System';
-            pkg.author = pkg.author || 'Ahmed Al-Qaisi <support@alqaisi.local>';
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          "
-          cat << 'EOF' > electron-builder.yml
-          appId: com.alqaisi.pos
-          productName: AlQaisi-POS
-          copyright: Ahmed Al-Qaisi Tires & Batteries
-          electronVersion: "22.3.27"
-          directories:
-            output: release
-          files:
-            - dist/**/*
-            - electron/**/*
-            - package.json
-          asar: true
-          mac:
-            category: public.app-category.business
-            artifactName: AlQaisi-POS-Mac-${version}-${arch}.${ext}
-            target:
-              - target: dmg
-                arch:
-                  - x64
-                  - arm64
-              - target: zip
-                arch:
-                  - x64
-                  - arm64
-          EOF
-
-      - name: Package macOS app
-        run: npx electron-builder --mac --config electron-builder.yml --publish never
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: AlQaisi-POS-macOS
-          path: |
-            release/*.dmg
-            release/*.zip
+          if-no-files-found: error
