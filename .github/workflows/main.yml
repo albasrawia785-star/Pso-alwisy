@@ -1,4 +1,4 @@
-name: Build Windows 64-bit EXE (Win7-Win11)
+name: Unzip & Build Windows 64-bit EXE (Win7-Win11)
 
 on:
   push:
@@ -16,11 +16,31 @@ defaults:
 
 jobs:
   build-windows-x64:
-    name: Windows 64-bit EXE (Win 7 - Win 11)
+    name: Unzip & Build Windows 64-bit EXE (Win 7 - Win 11)
     runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Extract ZIP archive & locate project directory
+        run: |
+          if [ ! -f package.json ]; then
+            while IFS= read -r -d '' zfile; do
+              echo "Extracting ZIP: $zfile"
+              ZIP_PATH="$zfile" powershell.exe -NoProfile -Command 'Expand-Archive -LiteralPath $env:ZIP_PATH -DestinationPath "." -Force'
+            done < <(find . -maxdepth 3 -type f -name "*.zip" -not -path "./.git/*" -not -path "./node_modules/*" -print0)
+          fi
+
+          PKG_FILE=$(find . -maxdepth 4 -type f -name "package.json" -not -path "*/node_modules/*" -not -path "*/.git/*" | head -n 1)
+          if [ -z "$PKG_FILE" ]; then
+            echo "ERROR: Could not find package.json even after extracting ZIP files."
+            ls -la
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PKG_FILE")
+          echo "Found project at: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -29,14 +49,18 @@ jobs:
 
       - name: Install dependencies & Electron 22 (Win7-Win11)
         run: |
+          cd "$PROJECT_DIR"
           npm install --legacy-peer-deps
           npm install --no-save --legacy-peer-deps electron@22.3.27 electron-builder@24.13.3
 
       - name: Build production web bundle
-        run: npm run build
+        run: |
+          cd "$PROJECT_DIR"
+          npm run build
 
       - name: Prepare Windows 64-bit packaging config
         run: |
+          cd "$PROJECT_DIR"
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
@@ -211,11 +235,13 @@ jobs:
           EOF
 
       - name: Package Windows 64-bit EXE (Setup & Portable)
-        run: npx electron-builder --win --x64 --config electron-builder.yml --publish never
+        run: |
+          cd "$PROJECT_DIR"
+          npx electron-builder --win --x64 --config electron-builder.yml --publish never
 
       - name: Upload Windows 64-bit EXE
         uses: actions/upload-artifact@v4
         with:
           name: AlQaisi-POS-Windows-64bit-EXE
-          path: release/*.exe
+          path: "**/release/*.exe"
           if-no-files-found: error
